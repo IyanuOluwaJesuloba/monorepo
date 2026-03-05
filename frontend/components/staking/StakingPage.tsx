@@ -1,13 +1,11 @@
-"use client"; // needed for state/hooks
+"use client";
 
-import { getStakingPosition, StakingPositionReponse } from "@/lib/config";
+import { claimRewards, getStakingPosition, stakeTokens, StakingPositionReponse, unstakeTokens } from "@/lib/config";
 import React, { useEffect, useState } from "react";
 import { Button } from "../ui/button";
 
 export default function StakingPage() {
-  // States
   const [stakingPosition, setStakingPosition] = useState<StakingPositionReponse | null>(null);
-  const [claimableRewards, setClaimableRewards] = useState(0);
   const [stakeAmount, setStakeAmount] = useState("");
   const [unstakeAmount, setUnstakeAmount] = useState("");
   const [status, setStatus] = useState("");
@@ -24,51 +22,146 @@ export default function StakingPage() {
       });
   }, []);
 
-  // Step 5 will add API calls here
-  const handleStake = () => {
+
+
+
+
+  //  This function handles balance state in the staking page
+  const updatePosition = (updates: {
+    stakedDelta?: number
+    claimableDelta?: number
+  }) => {
+    setStakingPosition((prev) => {
+      if (!prev) return prev
+
+      const currentStaked = Number(prev.position.staked)
+      const currentClaimable = Number(prev.position.claimable)
+
+      return {
+        ...prev,
+        position: {
+          staked: (
+            currentStaked + (updates.stakedDelta ?? 0)
+          ).toFixed(6),
+          claimable: (
+            currentClaimable + (updates.claimableDelta ?? 0)
+          ).toFixed(6),
+        },
+      }
+    })
+  }
+
+
+
+
+  // Function to stake token
+  const handleStake = async () => {
     if (!stakeAmount || Number(stakeAmount) <= 0) {
-      setStatus("Enter a valid amount to stake");
-      return;
+      setStatus("Enter a valid amount to stake")
+      return
     }
-    setStatus(`Staking ${stakeAmount} tokens...`);
-    // Call API here later
-  };
 
-  const handleUnstake = () => {
+    const amount = Number(stakeAmount)
+
+    try {
+      setStatus("Submitting stake transaction...")
+
+      const res = await stakeTokens(stakeAmount)
+
+      if (res.status === "CONFIRMED") {
+        setStatus("Stake confirmed on-chain")
+      } else {
+        setStatus("Stake queued for retry")
+      }
+
+      // Add to staked balance
+      updatePosition({ stakedDelta: amount })
+
+      setStakeAmount("")
+
+    } catch (err: any) {
+      setStatus(err.message || "Stake failed")
+    }
+  }
+
+
+
+  //  Function to unstake token
+  const handleUnstake = async () => {
     if (!unstakeAmount || Number(unstakeAmount) <= 0) {
-      setStatus("Enter a valid amount to unstake");
-      return;
+      setStatus("Enter a valid amount to unstake")
+      return
     }
-    setStatus(`Unstaking ${unstakeAmount} tokens...`);
-    // Call API here later
-  };
 
-  const handleClaim = () => {
-    setStatus("Claiming rewards...");
-    // Call API here later
-  };
+    const amount = Number(unstakeAmount)
 
+    try {
+      setStatus("Submitting unstake transaction...")
 
- const handleStakeInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-  const { value } = e.target;
+      const res = await unstakeTokens(unstakeAmount)
 
-  // Allow empty string to let user clear input
-  if (value === '' || !isNaN(Number(value))) {
-    setStakeAmount(value);
+      if (res.status === "CONFIRMED") {
+        setStatus("Unstake confirmed on-chain")
+      } else {
+        setStatus("Unstake queued for retry")
+      }
+
+      // Subtract from staked
+      updatePosition({ stakedDelta: -amount })
+
+      setUnstakeAmount("")
+
+    } catch (err: any) {
+      setStatus(err.message || "Unstake failed")
+    }
   }
-}
 
 
- const handleUnstakeInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-  const { value } = e.target;
 
-  // Allow empty string to let user clear input
-  if (value === '' || !isNaN(Number(value))) {
-    setUnstakeAmount(value);
+  //  Function to claim token
+  const handleClaim = async () => {
+    try {
+      setStatus("Claiming rewards...")
+
+      const claimable = Number(stakingPosition?.position.claimable ?? 0)
+
+      const res = await claimRewards()
+
+      if (res.status === "CONFIRMED") {
+        setStatus("Rewards claimed")
+      } else {
+        setStatus("Claim queued for retry")
+      }
+
+      // Remove claimable rewards
+      updatePosition({ claimableDelta: -claimable })
+
+    } catch (err: any) {
+      setStatus(err.message || "Claim failed")
+    }
   }
-}
 
-console.log(stakeAmount, unstakeAmount)
+
+  const handleStakeInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { value } = e.target;
+
+    // Allow empty string to let user clear input
+    if (value === '' || !isNaN(Number(value))) {
+      setStakeAmount(value);
+    }
+  }
+
+
+  const handleUnstakeInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { value } = e.target;
+
+    // Allow empty string to let user clear input
+    if (value === '' || !isNaN(Number(value))) {
+      setUnstakeAmount(value);
+    }
+  }
+
+
 
 
   return (
@@ -79,10 +172,13 @@ console.log(stakeAmount, unstakeAmount)
       <div className="mb-6">
         <p>
           Staked Balance:{" "}
-          <strong>{Number(stakingPosition?.position.staked).toFixed(2) ?? 0}</strong> Tokens
+          <strong>
+            {Number(stakingPosition?.position.staked ?? 0).toFixed(2)}
+          </strong>
+          Tokens
         </p>
         <p>
-          Claimable Rewards: <strong>{Number(stakingPosition?.position.claimable).toFixed(2)}</strong> Tokens
+          Claimable Rewards: <strong> {Number(stakingPosition?.position.claimable ?? 0).toFixed(2)}</strong> Tokens
         </p>
       </div>
 
@@ -98,7 +194,7 @@ console.log(stakeAmount, unstakeAmount)
         />
 
         <Button
-        type="button"
+          type="button"
           onClick={handleStake}
           className="border-3 border-foreground cursor-pointer  font-bold shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] hover:shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] hover:translate-x-0.5 hover:translate-y-0.5 transition-all text-foreground"
           variant={"secondary"}
@@ -119,8 +215,8 @@ console.log(stakeAmount, unstakeAmount)
         />
 
         <Button
-         type="button"
-          onClick={handleStake}
+          type="button"
+          onClick={handleUnstake}
           className="border-3 border-foreground cursor-pointer  font-bold shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] hover:shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] hover:translate-x-0.5 hover:translate-y-0.5 transition-all text-foreground"
           variant={"destructive"}
         >
@@ -131,12 +227,12 @@ console.log(stakeAmount, unstakeAmount)
       {/* Claim Rewards */}
       <div className="mb-6">
 
-       <Button
-         onClick={handleStake}
-       className="border-3 border-foreground cursor-pointer  font-bold shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] hover:shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] hover:translate-x-0.5 hover:translate-y-0.5 transition-all text-foreground"
-        variant={"default"}
-       >
-         Claim Rewards  </Button>
+        <Button
+          onClick={handleClaim}
+          className="border-3 border-foreground cursor-pointer  font-bold shadow-[4px_4px_0px_0px_rgba(26,26,26,1)] hover:shadow-[2px_2px_0px_0px_rgba(26,26,26,1)] hover:translate-x-0.5 hover:translate-y-0.5 transition-all text-foreground"
+          variant={"default"}
+        >
+          Claim Rewards  </Button>
       </div>
 
       {/* Status */}

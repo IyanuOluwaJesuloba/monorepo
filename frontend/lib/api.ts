@@ -1,6 +1,10 @@
 const baseUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
 
-export async function apiFetch<T>(path: string): Promise<T> {
+export async function apiFetch<T>(
+  path: string,
+  options?: RequestInit
+): Promise<T> {
+
   if (!baseUrl) {
     throw new Error("Missing NEXT_PUBLIC_BACKEND_URL");
   }
@@ -10,7 +14,9 @@ export async function apiFetch<T>(path: string): Promise<T> {
       cache: "no-store",
       headers: {
         "Content-Type": "application/json",
+        ...(options?.headers || {}),
       },
+      ...options,
     });
 
     if (!res.ok) {
@@ -19,9 +25,12 @@ export async function apiFetch<T>(path: string): Promise<T> {
     }
 
     return res.json();
+
   } catch (error) {
     if (error instanceof TypeError && error.message === "Failed to fetch") {
-      throw new Error(`Cannot connect to backend at ${baseUrl}. Please ensure the backend server is running.`);
+      throw new Error(
+        `Cannot connect to backend at ${baseUrl}. Please ensure the backend server is running.`
+      );
     }
     throw error;
   }
