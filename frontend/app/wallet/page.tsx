@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useState, useMemo, Suspense } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import {
   AlertCircle,
@@ -139,7 +139,7 @@ function getFilterLabel(filterId: string): string {
   return group?.label ?? filterId;
 }
 
-export default function WalletPage() {
+function WalletPageContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -794,6 +794,80 @@ export default function WalletPage() {
         }}
         availableBalance={balanceState.type === "success" ? balanceState.data.availableNgn : 0}
       />
+    </main>
+  );
+}
+
+// Wrapper with Suspense for useSearchParams
+export default function WalletPage() {
+  return (
+    <Suspense fallback={<WalletPageSkeleton />}>
+      <WalletPageContent />
+    </Suspense>
+  );
+}
+
+// Skeleton shown during suspense
+function WalletPageSkeleton() {
+  return (
+    <main className="min-h-screen bg-background">
+      <div className="container mx-auto px-4 py-8 md:py-10">
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-12 w-12 items-center justify-center border-3 border-foreground bg-secondary shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
+              <Wallet className="h-6 w-6" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold md:text-3xl">Wallet</h1>
+              <p className="text-sm text-muted-foreground">
+                Manage your NGN balance and view recent activity.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <section className="grid gap-4 md:grid-cols-3">
+          {[1, 2, 3].map((i) => (
+            <Card key={i} className="border-3 border-foreground shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
+              <CardHeader className="pb-2">
+                <Skeleton className="h-4 w-20" />
+                <Skeleton className="mt-2 h-8 w-40" />
+              </CardHeader>
+              <CardContent className="pt-0">
+                <Skeleton className="h-3 w-24" />
+              </CardContent>
+            </Card>
+          ))}
+        </section>
+
+        <section className="mt-8">
+          <div className="mb-4 flex items-center justify-between">
+            <Skeleton className="h-6 w-32" />
+            <Skeleton className="h-9 w-24" />
+          </div>
+          <Card className="border-3 border-foreground shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]">
+            <CardContent className="pt-6">
+              <div className="space-y-3">
+                {Array.from({ length: 5 }, (_, i) => (
+                  <div
+                    key={`skeleton-${i}`}
+                    className="flex items-center justify-between gap-4 border-b border-foreground/10 pb-3 last:border-0 last:pb-0"
+                  >
+                    <div className="flex min-w-0 flex-col gap-2">
+                      <Skeleton className="h-4 w-40" />
+                      <Skeleton className="h-3 w-56" />
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      <Skeleton className="h-4 w-24" />
+                      <Skeleton className="h-5 w-20" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </section>
+      </div>
     </main>
   );
 }
