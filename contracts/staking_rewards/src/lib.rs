@@ -1,6 +1,7 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, Address, BytesN, Env,
+    Symbol,
 };
 
 #[contracttype]
@@ -9,7 +10,9 @@ pub enum StorageKey {
     ContractVersion,
     Admin,
     Operator,
+    RentPayments,
     Paused,
+    Reentrancy,
     // Upgrade governance (#392)
     Guardian,
     UpgradeDelay,
@@ -24,10 +27,13 @@ pub enum ContractError {
     AlreadyInitialized = 1,
     NotAuthorized = 2,
     Paused = 3,
+    ReentrancyDetected = 4,
+    MissingRentPayments = 5,
+    InvalidAmount = 6,
     // Upgrade governance errors (#392)
-    UpgradeAlreadyPending = 4,
-    NoUpgradePending = 5,
-    UpgradeDelayNotMet = 6,
+    UpgradeAlreadyPending = 7,
+    NoUpgradePending = 8,
+    UpgradeDelayNotMet = 9,
 }
 
 #[contracttype]
@@ -44,6 +50,32 @@ const SCALE: i128 = 1_000_000_000;
 #[contract]
 pub struct StakingRewards;
 
+fn get_rent_payments(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&StorageKey::RentPayments)
+}
+
+fn require_rent_payments_invoker(env: &Env) {
+    let rent_payments =
+        get_rent_payments(env).unwrap_or_else(|| panic_with_error!(env, ContractError::MissingRentPayments));
+    rent_payments.require_auth();
+}
+
+fn enter_nonreentrant(env: &Env) {
+    if env
+        .storage()
+        .instance()
+        .get::<_, bool>(&StorageKey::Reentrancy)
+        .unwrap_or(false)
+    {
+        panic_with_error!(env, ContractError::ReentrancyDetected);
+    }
+    env.storage().instance().set(&StorageKey::Reentrancy, &true);
+}
+
+fn exit_nonreentrant(env: &Env) {
+    env.storage().instance().set(&StorageKey::Reentrancy, &false);
+}
+
 #[contractimpl]
 impl StakingRewards {
     pub fn init(env: Env, admin: Address) -> Result<(), ContractError> {
@@ -56,6 +88,7 @@ impl StakingRewards {
             .instance()
             .set(&StorageKey::ContractVersion, &1u32);
         env.storage().instance().set(&StorageKey::Paused, &false);
+        env.storage().instance().set(&StorageKey::Reentrancy, &false);
 
         env.events().publish(
             (
@@ -65,6 +98,53 @@ impl StakingRewards {
             (admin, 1u32),
         );
 
+        Ok(())
+    }
+
+    pub fn on_rent_payment(env: Env, amount: i128) {
+        Self::require_not_paused(&env)
+            .unwrap_or_else(|e| panic_with_error!(&env, e));
+        require_rent_payments_invoker(&env);
+        if amount <= 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+
+        enter_nonreentrant(&env);
+
+        let total = Self::get_total_staked(&env);
+        if total != 0 {
+            let reward_index = Self::get_reward_index(&env);
+            let new_index = reward_index + (amount * SCALE / total);
+            env.storage().persistent().set(&REWARD_INDEX, &new_index);
+        }
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "staking_rewards"),
+                Symbol::new(&env, "on_rent_payment"),
+            ),
+            amount,
+        );
+
+        exit_nonreentrant(&env);
+    }
+
+    pub fn set_rent_payments(
+        env: Env,
+        admin: Address,
+        rent_payments: Address,
+    ) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&StorageKey::RentPayments, &rent_payments);
+        env.events().publish(
+            (
+                Symbol::new(&env, "staking_rewards"),
+                Symbol::new(&env, "set_rent_payments"),
+            ),
+            (admin, rent_payments),
+        );
         Ok(())
     }
 
