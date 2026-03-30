@@ -16,7 +16,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
       if (!isAuthenticated()) {
         // Preserve the target URL for redirect after authentication
         const returnTo = encodeURIComponent(pathname);
-        router.replace(`/verify-otp?returnTo=${returnTo}`);
+        router.replace(`/verify-otp?returnTo=${returnTo}`); 
       } else {
         setAuthState("authed");
       }
