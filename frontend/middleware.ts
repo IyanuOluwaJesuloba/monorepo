@@ -1,20 +1,9 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import createIntlMiddleware from "next-intl/middleware";
-import { locales, defaultLocale } from "./i18n";
 
-const intlMiddleware = createIntlMiddleware({
-  locales,
-  defaultLocale,
-  localePrefix: "always",
-});
-
-export default function proxy(request: NextRequest) {
-  // First apply i18n middleware
-  const intlResponse = intlMiddleware(request);
-
-  // Then add security headers
-  const response = intlResponse || NextResponse.next();
+export default function middleware(request: NextRequest) {
+  // Pass through the request without i18n redirection
+  const response = NextResponse.next();
 
   // Content Security Policy
   const cspHeader = [
@@ -49,5 +38,5 @@ export default function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/(ar|en|es|fr|zh)/:path*"],
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
 };
