@@ -2,6 +2,7 @@
 
 extern crate alloc;
 
+use soroban_pausable::{Pausable, PausableError};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token::Client as TokenClient, Address,
     BytesN, Env, String, Symbol,
@@ -271,27 +272,37 @@ impl DealEscrow {
     pub fn balance(env: Env, deal_id: String) -> i128 {
         get_deal_balance(&env, &deal_id)
     }
+}
 
-    pub fn pause(env: Env, admin: Address) -> Result<(), ContractError> {
-        admin.require_auth();
-        let stored = get_admin(&env);
-        if admin != stored {
-            return Err(ContractError::NotAuthorized);
+#[contractimpl]
+impl Pausable for DealEscrow {
+    fn pause(env: Env, _admin: Address) -> Result<(), PausableError> {
+        _admin.require_auth();
+        let stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("admin not set");
+        if _admin != stored {
+            return Err(PausableError::NotAuthorized);
         }
         env.storage().instance().set(&DataKey::Paused, &true);
-        // #389: emit admin address (was `()`)
         env.events().publish(
-            (Symbol::new(&env, "deal_escrow"), Symbol::new(&env, "pause")),
-            admin,
+            (Symbol::new(&env, "Pausable"), Symbol::new(&env, "pause")),
+            (),
         );
         Ok(())
     }
 
-    pub fn unpause(env: Env, admin: Address) -> Result<(), ContractError> {
-        admin.require_auth();
-        let stored = get_admin(&env);
-        if admin != stored {
-            return Err(ContractError::NotAuthorized);
+    fn unpause(env: Env, _admin: Address) -> Result<(), PausableError> {
+        _admin.require_auth();
+        let stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("admin not set");
+        if _admin != stored {
+            return Err(PausableError::NotAuthorized);
         }
         env.storage().instance().set(&DataKey::Paused, &false);
         // #389: emit admin address (was `()`)
@@ -300,17 +311,18 @@ impl DealEscrow {
                 Symbol::new(&env, "deal_escrow"),
                 Symbol::new(&env, "unpause"),
             ),
-            admin,
+            _admin,
         );
         Ok(())
     }
 
-    pub fn is_paused(env: Env) -> bool {
+    fn is_paused(env: Env) -> bool {
         get_paused(&env)
     }
+}
 
-    // ── Upgrade governance (#392) ─────────────────────────────────────────────
-
+#[contractimpl]
+impl DealEscrow {
     pub fn set_guardian(env: Env, admin: Address, guardian: Address) -> Result<(), ContractError> {
         admin.require_auth();
         if admin != get_admin(&env) {
@@ -482,7 +494,15 @@ impl DealEscrow {
             ),
             (admin, hash),
         );
+
         Ok(())
+    }
+
+    fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get::<_, bool>(&DataKey::Paused)
+            .unwrap_or(false)
     }
 }
 

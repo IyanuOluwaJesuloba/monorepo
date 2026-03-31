@@ -488,15 +488,13 @@
           "v0": {
             "topics": [
               {
-                "symbol": "staking_pool"
+                "symbol": "Pausable"
               },
               {
                 "symbol": "unpause"
               }
             ],
-            "data": {
-              "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
-            }
+            "data": "void"
           }
         }
       },

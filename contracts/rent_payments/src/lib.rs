@@ -1,5 +1,6 @@
 #![no_std]
 
+use soroban_pausable::{Pausable, PausableError};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, vec, Address, BytesN,
     Env, Symbol, Vec,
@@ -98,9 +99,16 @@ fn get_admin(env: &Env) -> Address {
         .expect("admin not set")
 }
 
-fn require_admin(env: &Env) {
+fn require_admin(env: &Env) -> Result<(), ContractError> {
     let admin = get_admin(env);
     admin.require_auth();
+    Ok(())
+}
+
+fn require_not_paused(env: &Env) {
+    if is_paused(env) {
+        panic!("contract is paused");
+    }
 }
 
 fn get_wallet(env: &Env) -> Option<Address> {
@@ -362,7 +370,7 @@ impl RentPayments {
         amount: i128,
         payer: Address,
     ) -> Result<Receipt, ContractError> {
-        require_admin(&env);
+        let _ = require_admin(&env)?;
         require_not_paused(&env);
 
         if amount <= 0 {
@@ -389,7 +397,7 @@ impl RentPayments {
 
         env.events().publish(
             (Symbol::new(&env, "receipt_created"), deal_id),
-            (receipt_id, amount, payer_clone),
+            (receipt_id, amount, payer_clone, 1u32),
         );
 
         Ok(receipt)
@@ -560,6 +568,41 @@ impl RentPayments {
     /// Get the total number of receipts for a deal
     pub fn receipt_count(env: Env, deal_id: DealId) -> u64 {
         get_receipt_count(&env, deal_id)
+    }
+}
+
+#[contractimpl]
+impl Pausable for RentPayments {
+    fn pause(env: Env, admin: Address) -> Result<(), PausableError> {
+        admin.require_auth();
+        let stored = get_admin(&env);
+        if admin != stored {
+            return Err(PausableError::NotAuthorized);
+        }
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.events().publish(
+            (Symbol::new(&env, "Pausable"), Symbol::new(&env, "pause")),
+            (),
+        );
+        Ok(())
+    }
+
+    fn unpause(env: Env, admin: Address) -> Result<(), PausableError> {
+        admin.require_auth();
+        let stored = get_admin(&env);
+        if admin != stored {
+            return Err(PausableError::NotAuthorized);
+        }
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.events().publish(
+            (Symbol::new(&env, "Pausable"), Symbol::new(&env, "unpause")),
+            (),
+        );
+        Ok(())
+    }
+
+    fn is_paused(env: Env) -> bool {
+        is_paused(&env)
     }
 }
 
@@ -1224,11 +1267,11 @@ mod test {
             invoke: &MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "pause",
-                args: ().into_val(&env),
+                args: (admin.clone(),).into_val(&env),
                 sub_invokes: &[],
             },
         }]);
-        client.pause();
+        client.pause(&admin);
 
         assert!(client.is_paused());
 
@@ -1247,5 +1290,43 @@ mod test {
             .unwrap_err()
             .unwrap();
         assert_eq!(err, ContractError::Paused);
+    }
+
+    // ============================================================================
+    // Event Schema Version Tests
+    // ============================================================================
+
+    #[test]
+    fn receipt_created_event_includes_schema_version_one() {
+        use soroban_sdk::testutils::Events;
+        use soroban_sdk::{IntoVal, TryIntoVal};
+
+        let env = Env::default();
+        let (admin, client, contract_id) = setup(&env);
+        let payer = Address::generate(&env);
+        let deal_id = 1u64;
+
+        env.mock_auths(&[MockAuth {
+            address: &admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "create_receipt",
+                args: (deal_id, 5000i128, payer.clone()).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.create_receipt(&deal_id, &5000i128, &payer);
+
+        let events = env.events().all();
+        // The last event is receipt_created (init emits one event before)
+        let last = events.last().unwrap();
+
+        // data is (receipt_id: u64, amount: i128, payer: Address, schema_version: u32)
+        let data: soroban_sdk::Vec<soroban_sdk::Val> = last.2.clone().try_into_val(&env).unwrap();
+        let schema_version: u32 = data.get(3).unwrap().try_into_val(&env).unwrap();
+        assert_eq!(
+            schema_version, 1u32,
+            "receipt_created event must carry schema_version = 1"
+        );
     }
 }

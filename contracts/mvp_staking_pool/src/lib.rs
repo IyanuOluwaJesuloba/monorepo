@@ -1,5 +1,6 @@
 #![no_std]
 
+use soroban_pausable::{Pausable, PausableError};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token::Client as TokenClient, Address,
     BytesN, Env, Symbol,
@@ -309,36 +310,6 @@ impl StakingPool {
         amount
     }
 
-    pub fn pause(env: Env) {
-        require_admin(&env);
-        let admin = get_admin(&env);
-        env.storage().instance().set(&DataKey::Paused, &true);
-        env.events().publish(
-            (
-                Symbol::new(&env, "mvp_staking_pool"),
-                Symbol::new(&env, "paused"),
-            ),
-            admin,
-        );
-    }
-
-    pub fn unpause(env: Env) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
-        env.storage().instance().set(&DataKey::Paused, &false);
-        env.events().publish(
-            (
-                Symbol::new(&env, "mvp_staking_pool"),
-                Symbol::new(&env, "unpaused"),
-            ),
-            admin,
-        );
-    }
-
-    pub fn is_paused(env: Env) -> bool {
-        is_paused(&env)
-    }
-
     // ── Upgrade governance (#392) ──────────────────────────────────────────────
 
     pub fn set_guardian(env: Env, admin: Address, guardian: Address) -> Result<(), ContractError> {
@@ -494,6 +465,41 @@ impl StakingPool {
     }
 }
 
+#[contractimpl]
+impl Pausable for StakingPool {
+    fn pause(env: Env, admin: Address) -> Result<(), PausableError> {
+        admin.require_auth();
+        let stored = get_admin(&env);
+        if admin != stored {
+            return Err(PausableError::NotAuthorized);
+        }
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.events().publish(
+            (Symbol::new(&env, "Pausable"), Symbol::new(&env, "pause")),
+            (),
+        );
+        Ok(())
+    }
+
+    fn unpause(env: Env, admin: Address) -> Result<(), PausableError> {
+        admin.require_auth();
+        let stored = get_admin(&env);
+        if admin != stored {
+            return Err(PausableError::NotAuthorized);
+        }
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.events().publish(
+            (Symbol::new(&env, "Pausable"), Symbol::new(&env, "unpause")),
+            (),
+        );
+        Ok(())
+    }
+
+    fn is_paused(env: Env) -> bool {
+        is_paused(&env)
+    }
+}
+
 #[cfg(test)]
 mod test {
     extern crate std;
@@ -557,11 +563,11 @@ mod test {
             invoke: &MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "pause",
-                args: ().into_val(&env),
+                args: (admin.clone(),).into_val(&env),
                 sub_invokes: &[],
             },
         }]);
-        client.pause();
+        client.pause(&admin);
     }
 
     // ============================================================================
@@ -589,11 +595,11 @@ mod test {
             invoke: &MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "pause",
-                args: ().into_val(&env),
+                args: (admin.clone(),).into_val(&env),
                 sub_invokes: &[],
             },
         }]);
-        client.pause();
+        client.pause(&admin);
     }
 
     #[test]
@@ -647,24 +653,24 @@ mod test {
             invoke: &MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "pause",
-                args: ().into_val(&env),
+                args: (admin.clone(),).into_val(&env),
                 sub_invokes: &[],
             },
         }]);
 
-        client.pause();
+        client.pause(&admin);
 
         env.mock_auths(&[MockAuth {
             address: &admin,
             invoke: &MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "unpause",
-                args: ().into_val(&env),
+                args: (admin.clone(),).into_val(&env),
                 sub_invokes: &[],
             },
         }]);
 
-        client.unpause();
+        client.unpause(&admin);
     }
 
     #[test]
@@ -684,7 +690,7 @@ mod test {
             },
         }]);
 
-        client.pause();
+        client.pause(&non_admin);
     }
 
     // ============================================================================
@@ -703,11 +709,11 @@ mod test {
             invoke: &MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "pause",
-                args: ().into_val(&env),
+                args: (admin.clone(),).into_val(&env),
                 sub_invokes: &[],
             },
         }]);
-        client.pause();
+        client.pause(&admin);
 
         // Try to stake while paused
         env.mock_auths(&[MockAuth {
@@ -735,11 +741,11 @@ mod test {
             invoke: &MockAuthInvoke {
                 contract: &contract_id,
                 fn_name: "pause",
-                args: ().into_val(&env),
+                args: (admin.clone(),).into_val(&env),
                 sub_invokes: &[],
             },
         }]);
-        client.pause();
+        client.pause(&admin);
 
         // Try to unstake while paused
         env.mock_auths(&[MockAuth {
@@ -932,5 +938,244 @@ mod test {
         // Test that unstake function exists and has correct signature
         // Event emission is tested in integration tests with actual token transfers
         assert_eq!(client.staked_balance(&user), 0i128);
+    }
+}
+
+// ============================================================================
+// Reward Math Invariant Tests
+//
+// These tests verify the correctness of the global-index reward distribution
+// formula across edge cases. All tests use mock_all_auths and real token
+// transfers so the full stake → fund_rewards → claimable → claim path runs.
+//
+// Formula under test:
+//   index_increment = (reward * REWARD_INDEX_SCALE) / total_staked
+//   user_accrued    = (user_staked * index_delta)   / REWARD_INDEX_SCALE
+// ============================================================================
+#[cfg(test)]
+mod reward_math_invariants {
+    extern crate std;
+
+    use super::{StakingPool, StakingPoolClient};
+    use soroban_sdk::testutils::Address as _;
+    use soroban_sdk::{token::StellarAssetClient, Address, Env};
+
+    fn setup(env: &Env) -> (StakingPoolClient<'_>, Address, Address) {
+        let contract_id = env.register(StakingPool, ());
+        let client = StakingPoolClient::new(env, &contract_id);
+        let admin = Address::generate(env);
+        let token_admin = Address::generate(env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        client.init(&admin, &token);
+        (client, admin, token)
+    }
+
+    fn mint(env: &Env, token: &Address, to: &Address, amount: i128) {
+        StellarAssetClient::new(env, token).mint(to, &amount);
+    }
+
+    // Invariant 1: sole staker receives 100 % of rewards
+    // When only one user is staked, every token funded as reward must be
+    // fully claimable by that user (no rounding loss for whole-number inputs).
+    #[test]
+    fn invariant_sole_staker_receives_all_rewards() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, token) = setup(&env);
+
+        let user = Address::generate(&env);
+        mint(&env, &token, &admin, 1_000i128);
+        mint(&env, &token, &user, 1_000i128);
+
+        client.stake(&user, &500i128);
+        client.fund_rewards(&admin, &500i128);
+
+        assert_eq!(
+            client.claimable(&user),
+            500i128,
+            "sole staker must receive 100% of funded rewards"
+        );
+    }
+
+    // Invariant 2: rewards split proportionally between two equal stakers
+    // Two users with identical stakes must receive identical reward shares.
+    #[test]
+    fn invariant_equal_stakers_receive_equal_rewards() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, token) = setup(&env);
+
+        let user_a = Address::generate(&env);
+        let user_b = Address::generate(&env);
+        mint(&env, &token, &admin, 1_000i128);
+        mint(&env, &token, &user_a, 500i128);
+        mint(&env, &token, &user_b, 500i128);
+
+        client.stake(&user_a, &500i128);
+        client.stake(&user_b, &500i128);
+        client.fund_rewards(&admin, &1_000i128);
+
+        let reward_a = client.claimable(&user_a);
+        let reward_b = client.claimable(&user_b);
+        assert_eq!(
+            reward_a, reward_b,
+            "equal stakers must receive equal rewards"
+        );
+        assert_eq!(reward_a, 500i128);
+    }
+
+    // Invariant 3: rewards split proportionally for unequal stakes (2:1 ratio)
+    // A user with twice the stake must receive twice the reward.
+    #[test]
+    fn invariant_reward_proportional_to_stake_ratio() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, token) = setup(&env);
+
+        let user_a = Address::generate(&env);
+        let user_b = Address::generate(&env);
+        mint(&env, &token, &admin, 900i128);
+        mint(&env, &token, &user_a, 600i128);
+        mint(&env, &token, &user_b, 300i128);
+
+        // user_a stakes 2x user_b
+        client.stake(&user_a, &600i128);
+        client.stake(&user_b, &300i128);
+        client.fund_rewards(&admin, &900i128);
+
+        let reward_a = client.claimable(&user_a);
+        let reward_b = client.claimable(&user_b);
+        assert_eq!(reward_a, 600i128, "2x staker must receive 2x reward");
+        assert_eq!(reward_b, 300i128);
+    }
+
+    // Invariant 4: late staker earns no rewards from funding rounds before their stake
+    // Rewards funded before a user stakes must not accrue to that user.
+    #[test]
+    fn invariant_late_staker_earns_no_pre_stake_rewards() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, token) = setup(&env);
+
+        let early = Address::generate(&env);
+        let late = Address::generate(&env);
+        mint(&env, &token, &admin, 2_000i128);
+        mint(&env, &token, &early, 1_000i128);
+        mint(&env, &token, &late, 1_000i128);
+
+        client.stake(&early, &1_000i128);
+        client.fund_rewards(&admin, &1_000i128); // funded before late staker joins
+
+        client.stake(&late, &1_000i128);
+        client.fund_rewards(&admin, &1_000i128); // funded after both are staked
+
+        let reward_early = client.claimable(&early);
+        let reward_late = client.claimable(&late);
+
+        // early: 1000 (sole) + 500 (split) = 1500
+        // late:  0    (pre)  + 500 (split) = 500
+        assert_eq!(
+            reward_early, 1_500i128,
+            "early staker must earn pre-join rewards"
+        );
+        assert_eq!(
+            reward_late, 500i128,
+            "late staker must not earn pre-stake rewards"
+        );
+    }
+
+    // Invariant 5: claimable returns zero for a user who has never staked
+    // A user with no stake must never accumulate rewards regardless of funding.
+    #[test]
+    fn invariant_non_staker_claimable_is_always_zero() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, token) = setup(&env);
+
+        let staker = Address::generate(&env);
+        let bystander = Address::generate(&env);
+        mint(&env, &token, &admin, 500i128);
+        mint(&env, &token, &staker, 500i128);
+
+        client.stake(&staker, &500i128);
+        client.fund_rewards(&admin, &500i128);
+
+        assert_eq!(
+            client.claimable(&bystander),
+            0i128,
+            "non-staker must never have claimable rewards"
+        );
+    }
+
+    // Invariant 6: small stake amount (1 token) still accrues rewards correctly
+    // The index math must not lose the reward entirely due to integer division
+    // when the stake is very small relative to the reward pool.
+    #[test]
+    fn invariant_small_stake_accrues_nonzero_reward_when_sole_staker() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, token) = setup(&env);
+
+        let user = Address::generate(&env);
+        mint(&env, &token, &admin, 1_000_000i128);
+        mint(&env, &token, &user, 1i128);
+
+        client.stake(&user, &1i128);
+        client.fund_rewards(&admin, &1_000_000i128);
+
+        assert_eq!(
+            client.claimable(&user),
+            1_000_000i128,
+            "sole staker with 1-token stake must receive full reward"
+        );
+    }
+
+    // Invariant 7: large stake amounts do not overflow the index calculation
+    // Uses amounts near i64::MAX to verify no arithmetic panic occurs.
+    #[test]
+    fn invariant_large_amounts_do_not_overflow() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, token) = setup(&env);
+
+        let user = Address::generate(&env);
+        // Use 10^14 — large but safely within i128 range after scaling
+        let large: i128 = 100_000_000_000_000i128;
+        mint(&env, &token, &admin, large);
+        mint(&env, &token, &user, large);
+
+        client.stake(&user, &large);
+        client.fund_rewards(&admin, &large);
+
+        let reward = client.claimable(&user);
+        assert_eq!(
+            reward, large,
+            "large-amount sole staker must receive full reward"
+        );
+    }
+
+    // Invariant 8: claim resets claimable to zero; double-claim yields nothing
+    // After a successful claim, subsequent calls must return 0.
+    #[test]
+    fn invariant_claim_is_idempotent_after_first_claim() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (client, admin, token) = setup(&env);
+
+        let user = Address::generate(&env);
+        mint(&env, &token, &admin, 200i128);
+        mint(&env, &token, &user, 200i128);
+
+        client.stake(&user, &200i128);
+        client.fund_rewards(&admin, &200i128);
+
+        let first = client.claim(&user);
+        assert_eq!(first, 200i128);
+
+        let second = client.claim(&user);
+        assert_eq!(second, 0i128, "second claim must return zero");
+        assert_eq!(client.claimable(&user), 0i128);
     }
 }

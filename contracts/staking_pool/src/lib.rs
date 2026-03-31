@@ -9,11 +9,15 @@ use alloc::format;
 use alloc::string::ToString;
 use alloc::vec::Vec as StdVec;
 
+use soroban_pausable::{Pausable, PausableError};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Bytes, BytesN, Env, Map,
     String, Symbol,
 };
 // Map is still used in ReceiptInput.metadata
+
+#[cfg(kani)]
+pub mod formal_properties;
 
 #[contracttype]
 #[derive(Clone)]
@@ -376,6 +380,21 @@ impl StakingPool {
         Ok(())
     }
 
+    pub fn set_admin(env: Env, admin: Address, new_admin: Address) -> Result<(), ContractError> {
+        require_admin(&env, &admin)?;
+
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "staking_pool"),
+                Symbol::new(&env, "set_admin"),
+            ),
+            (admin, new_admin),
+        );
+        Ok(())
+    }
+
     pub fn is_operator(env: Env, addr: Address) -> bool {
         is_operator(&env, &addr)
     }
@@ -496,38 +515,6 @@ impl StakingPool {
 
     pub fn total_staked(env: Env) -> i128 {
         get_total_staked(&env)
-    }
-
-    pub fn pause(env: Env, admin: Address) -> Result<(), ContractError> {
-        require_admin(&env, &admin)?;
-        env.storage().instance().set(&DataKey::Paused, &true);
-        // #389: emit admin address (was `()`)
-        env.events().publish(
-            (
-                Symbol::new(&env, "staking_pool"),
-                Symbol::new(&env, "pause"),
-            ),
-            admin,
-        );
-        Ok(())
-    }
-
-    pub fn unpause(env: Env, admin: Address) -> Result<(), ContractError> {
-        require_admin(&env, &admin)?;
-        env.storage().instance().set(&DataKey::Paused, &false);
-        // #389: emit admin address (was `()`)
-        env.events().publish(
-            (
-                Symbol::new(&env, "staking_pool"),
-                Symbol::new(&env, "unpause"),
-            ),
-            admin,
-        );
-        Ok(())
-    }
-
-    pub fn is_paused(env: Env) -> bool {
-        is_paused(&env)
     }
 
     pub fn set_lock_period(env: Env, admin: Address, seconds: u64) -> Result<(), ContractError> {
@@ -754,6 +741,37 @@ impl StakingPool {
     }
 }
 
+#[contractimpl]
+impl Pausable for StakingPool {
+    fn pause(env: Env, admin: Address) -> Result<(), PausableError> {
+        if require_admin(&env, &admin).is_err() {
+            return Err(PausableError::NotAuthorized);
+        }
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.events().publish(
+            (Symbol::new(&env, "Pausable"), Symbol::new(&env, "pause")),
+            (),
+        );
+        Ok(())
+    }
+
+    fn unpause(env: Env, admin: Address) -> Result<(), PausableError> {
+        if require_admin(&env, &admin).is_err() {
+            return Err(PausableError::NotAuthorized);
+        }
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.events().publish(
+            (Symbol::new(&env, "Pausable"), Symbol::new(&env, "unpause")),
+            (),
+        );
+        Ok(())
+    }
+
+    fn is_paused(env: Env) -> bool {
+        is_paused(&env)
+    }
+}
+
 #[cfg(test)]
 mod test {
     extern crate std;
@@ -954,7 +972,7 @@ mod test {
         }]);
 
         let err = client.try_pause(&non_admin).unwrap_err().unwrap();
-        assert_eq!(err, ContractError::NotAuthorized);
+        assert_eq!(err, soroban_pausable::PausableError::NotAuthorized);
     }
 
     #[test]
@@ -1235,7 +1253,7 @@ mod test {
         assert_eq!(topics.len(), 2);
 
         let contract_name: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
-        assert_eq!(contract_name, Symbol::new(&env, "staking_pool"));
+        assert_eq!(contract_name, Symbol::new(&env, "Pausable"));
         let event_name: Symbol = topics.get(1).unwrap().try_into_val(&env).unwrap();
         assert_eq!(event_name, Symbol::new(&env, "pause"));
     }
@@ -1276,7 +1294,7 @@ mod test {
         assert_eq!(topics.len(), 2);
 
         let contract_name: Symbol = topics.get(0).unwrap().try_into_val(&env).unwrap();
-        assert_eq!(contract_name, Symbol::new(&env, "staking_pool"));
+        assert_eq!(contract_name, Symbol::new(&env, "Pausable"));
         let event_name: Symbol = topics.get(1).unwrap().try_into_val(&env).unwrap();
         assert_eq!(event_name, Symbol::new(&env, "unpause"));
     }
@@ -1682,7 +1700,7 @@ mod test {
             },
         }]);
         let err = client.try_pause(&non_admin).unwrap_err().unwrap();
-        assert_eq!(err, ContractError::NotAuthorized);
+        assert_eq!(err, soroban_pausable::PausableError::NotAuthorized);
 
         // Test that admin can pause
         env.mock_auths(&[MockAuth {
