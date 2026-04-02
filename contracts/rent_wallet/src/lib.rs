@@ -1,5 +1,6 @@
 #![no_std]
 
+use soroban_pausable::{Pausable, PausableError};
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, Symbol,
 };
@@ -7,7 +8,7 @@ use soroban_sdk::{
 // ── Storage keys ─────────────────────────────────────────────────────────────
 pub mod validation;
 
-#[cfg(test)]
+#[cfg(kani)]
 mod formal_properties;
 
 #[contracttype]
@@ -218,36 +219,43 @@ impl RentWallet {
 
         Ok(())
     }
+}
 
-    pub fn pause(env: Env, admin: Address) -> Result<(), ContractError> {
-        require_admin(&env, &admin)?;
+#[contractimpl]
+impl Pausable for RentWallet {
+    fn pause(env: Env, admin: Address) -> Result<(), PausableError> {
+        if require_admin(&env, &admin).is_err() {
+            return Err(PausableError::NotAuthorized);
+        }
         env.storage().instance().set(&DataKey::Paused, &true);
         // #389: emit admin address (was `()`)
         env.events().publish(
-            (Symbol::new(&env, "rent_wallet"), Symbol::new(&env, "pause")),
-            admin,
+            (Symbol::new(&env, "Pausable"), Symbol::new(&env, "pause")),
+            (),
         );
         Ok(())
     }
 
-    pub fn unpause(env: Env, admin: Address) -> Result<(), ContractError> {
-        require_admin(&env, &admin)?;
+    fn unpause(env: Env, admin: Address) -> Result<(), PausableError> {
+        if require_admin(&env, &admin).is_err() {
+            return Err(PausableError::NotAuthorized);
+        }
         env.storage().instance().set(&DataKey::Paused, &false);
         // #389: emit admin address (was `()`)
         env.events().publish(
-            (
-                Symbol::new(&env, "rent_wallet"),
-                Symbol::new(&env, "unpause"),
-            ),
-            admin,
+            (Symbol::new(&env, "Pausable"), Symbol::new(&env, "unpause")),
+            (),
         );
         Ok(())
     }
 
-    pub fn is_paused(env: Env) -> bool {
+    fn is_paused(env: Env) -> bool {
         get_paused_state(&env)
     }
+}
 
+#[contractimpl]
+impl RentWallet {
     // ── Upgrade governance (#392) ─────────────────────────────────────────────
 
     pub fn set_guardian(env: Env, admin: Address, guardian: Address) -> Result<(), ContractError> {
@@ -917,6 +925,87 @@ mod test {
 
     #[test]
     fn paused_contract_blocks_credit_and_debit() {
+        let env = Env::default();
+        let (contract_id, client, admin, user, _non_admin) = setup(&env);
+
+        env.mock_auths(&[MockAuth {
+            address: &admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "pause",
+                args: (admin.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.try_pause(&admin).unwrap().unwrap();
+
+        env.mock_auths(&[MockAuth {
+            address: &admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "credit",
+                args: (admin.clone(), user.clone(), 10i128).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        let err = client
+            .try_credit(&admin, &user, &10i128)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, ContractError::Paused);
+    }
+
+    #[test]
+    fn non_admin_cannot_pause() {
+        let env = Env::default();
+        let (contract_id, client, _admin, _user, non_admin) = setup(&env);
+
+        env.mock_auths(&[MockAuth {
+            address: &non_admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "pause",
+                args: (non_admin.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        let err = client.try_pause(&non_admin).unwrap_err().unwrap();
+        assert_eq!(err, soroban_pausable::PausableError::NotAuthorized);
+    }
+
+    #[test]
+    fn non_admin_cannot_unpause() {
+        let env = Env::default();
+        let (contract_id, client, admin, _user, non_admin) = setup(&env);
+
+        // First pause as admin
+        env.mock_auths(&[MockAuth {
+            address: &admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "pause",
+                args: (admin.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.try_pause(&admin).unwrap().unwrap();
+
+        // Try to unpause as non-admin
+        env.mock_auths(&[MockAuth {
+            address: &non_admin,
+            invoke: &MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "unpause",
+                args: (non_admin.clone(),).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        let err = client.try_unpause(&non_admin).unwrap_err().unwrap();
+        assert_eq!(err, soroban_pausable::PausableError::NotAuthorized);
+    }
+
+    #[test]
+    fn credit_fails_when_paused() {
         let env = Env::default();
         let (contract_id, client, admin, user, _non_admin) = setup(&env);
 
