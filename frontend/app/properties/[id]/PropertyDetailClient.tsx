@@ -489,7 +489,7 @@ export default function PropertyDetailClient({
                     <div className="flex items-center gap-2 mb-3">
                       <Calculator className="h-5 w-5 text-primary" />
                       <span className="font-mono font-bold">
-                        Pay with Sheltaflex
+                        Pay with Shelterflex
                       </span>
                     </div>
 
