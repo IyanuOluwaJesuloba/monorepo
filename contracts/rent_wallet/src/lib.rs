@@ -196,8 +196,7 @@ impl RentWallet {
         }
         payer.require_auth();
 
-        let rent_payments =
-            get_rent_payments(&env).ok_or(ContractError::MissingRentPayments)?;
+        let rent_payments = get_rent_payments(&env).ok_or(ContractError::MissingRentPayments)?;
 
         enter_nonreentrant(&env)?;
 

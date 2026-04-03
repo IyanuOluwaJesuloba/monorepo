@@ -62,8 +62,8 @@ fn get_rent_payments(env: &Env) -> Option<Address> {
 }
 
 fn require_rent_payments_invoker(env: &Env) {
-    let rent_payments =
-        get_rent_payments(env).unwrap_or_else(|| panic_with_error!(env, ContractError::MissingRentPayments));
+    let rent_payments = get_rent_payments(env)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::MissingRentPayments));
     rent_payments.require_auth();
 }
 
@@ -80,7 +80,9 @@ fn enter_nonreentrant(env: &Env) {
 }
 
 fn exit_nonreentrant(env: &Env) {
-    env.storage().instance().set(&StorageKey::Reentrancy, &false);
+    env.storage()
+        .instance()
+        .set(&StorageKey::Reentrancy, &false);
 }
 
 #[contractimpl]
@@ -95,7 +97,9 @@ impl StakingRewards {
             .instance()
             .set(&StorageKey::ContractVersion, &1u32);
         env.storage().instance().set(&StorageKey::Paused, &false);
-        env.storage().instance().set(&StorageKey::Reentrancy, &false);
+        env.storage()
+            .instance()
+            .set(&StorageKey::Reentrancy, &false);
 
         env.events().publish(
             (
@@ -109,8 +113,7 @@ impl StakingRewards {
     }
 
     pub fn on_rent_payment(env: Env, amount: i128) {
-        Self::require_not_paused(&env)
-            .unwrap_or_else(|e| panic_with_error!(&env, e));
+        Self::require_not_paused(&env).unwrap_or_else(|e| panic_with_error!(&env, e));
         require_rent_payments_invoker(&env);
         if amount <= 0 {
             panic_with_error!(&env, ContractError::InvalidAmount);

@@ -235,8 +235,8 @@ fn get_staking_rewards(env: &Env) -> Option<Address> {
 }
 
 fn require_wallet_invoker(env: &Env) {
-    let wallet = get_wallet(env)
-        .unwrap_or_else(|| panic_with_error!(env, ContractError::MissingWallet));
+    let wallet =
+        get_wallet(env).unwrap_or_else(|| panic_with_error!(env, ContractError::MissingWallet));
     wallet.require_auth();
 }
 
@@ -253,9 +253,7 @@ fn enter_nonreentrant(env: &Env) {
 }
 
 fn exit_nonreentrant(env: &Env) {
-    env.storage()
-        .instance()
-        .set(&DataKey::Reentrancy, &false);
+    env.storage().instance().set(&DataKey::Reentrancy, &false);
 }
 
 #[contractimpl]
@@ -347,7 +345,12 @@ impl RentPayments {
         Ok(())
     }
 
-    pub fn record_rent_payment(env: Env, deal_id: DealId, amount: i128, payer: Address) -> ReceiptId {
+    pub fn record_rent_payment(
+        env: Env,
+        deal_id: DealId,
+        amount: i128,
+        payer: Address,
+    ) -> ReceiptId {
         require_not_paused(&env);
         require_wallet_invoker(&env);
         if amount <= 0 {
