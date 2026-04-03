@@ -130,6 +130,74 @@ impl RentWallet {
         Ok(())
     }
 
+    pub fn set_rent_payments(
+        env: Env,
+        admin: Address,
+        rent_payments: Address,
+    ) -> Result<(), ContractError> {
+        require_admin(&env, &admin)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::RentPayments, &rent_payments);
+        env.events().publish(
+            (
+                Symbol::new(&env, "rent_wallet"),
+                Symbol::new(&env, "set_rent_payments"),
+            ),
+            (admin, rent_payments),
+        );
+        Ok(())
+    }
+
+    pub fn pay_rent(
+        env: Env,
+        payer: Address,
+        deal_id: u64,
+        amount: i128,
+    ) -> Result<u64, ContractError> {
+        require_not_paused(&env)?;
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+        payer.require_auth();
+
+        let rent_payments =
+            get_rent_payments(&env).ok_or(ContractError::MissingRentPayments)?;
+
+        enter_nonreentrant(&env)?;
+
+        let cur = get_balance(&env, &payer);
+        if cur < amount {
+            exit_nonreentrant(&env);
+            return Err(ContractError::InsufficientBalance);
+        }
+        put_balance(&env, &payer, cur - amount);
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "rent_wallet"),
+                Symbol::new(&env, "pay_rent"),
+                payer.clone(),
+            ),
+            (deal_id, amount, rent_payments.clone()),
+        );
+
+        let rp_client = RentPaymentsClient::new(&env, &rent_payments);
+        let receipt_id = rp_client.record_rent_payment(&deal_id, &amount, &payer);
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "rent_wallet"),
+                Symbol::new(&env, "rent_payment_recorded"),
+                payer,
+            ),
+            (deal_id, receipt_id, amount),
+        );
+
+        exit_nonreentrant(&env);
+        Ok(receipt_id)
+    }
+
     pub fn contract_version(env: Env) -> u32 {
         env.storage()
             .instance()

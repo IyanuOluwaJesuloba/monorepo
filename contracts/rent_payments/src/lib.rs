@@ -5,6 +5,8 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, vec, Address, BytesN, Env, Symbol, Vec,
 };
 
+// TODO: Import StakingRewardsClient when contract interface is available
+
 /// Deal ID type - using u64 for simplicity
 pub type DealId = u64;
 
@@ -56,6 +58,9 @@ pub enum DataKey {
     Deals,
     Receipts(DealId),
     ReceiptCount(DealId),
+    Wallet,
+    StakingRewards,
+    Reentrancy,
 }
 
 #[contracterror]
@@ -65,6 +70,9 @@ pub enum ContractError {
     AlreadyInitialized = 1,
     InvalidAmount = 2,
     InvalidLimit = 3,
+    MissingStakingRewards = 4,
+    ReentrancyDetected = 5,
+    MissingWallet = 6,
 }
 
 #[contract]
@@ -171,6 +179,38 @@ fn get_tx_id(env: &Env) -> TxId {
     BytesN::from_array(env, &bytes)
 }
 
+fn get_wallet(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::Wallet)
+}
+
+fn get_staking_rewards(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::StakingRewards)
+}
+
+fn require_wallet_invoker(env: &Env) {
+    let wallet = get_wallet(env)
+        .unwrap_or_else(|| panic_with_error!(env, ContractError::MissingWallet));
+    wallet.require_auth();
+}
+
+fn enter_nonreentrant(env: &Env) {
+    if env
+        .storage()
+        .instance()
+        .get::<_, bool>(&DataKey::Reentrancy)
+        .unwrap_or(false)
+    {
+        panic_with_error!(env, ContractError::ReentrancyDetected);
+    }
+    env.storage().instance().set(&DataKey::Reentrancy, &true);
+}
+
+fn exit_nonreentrant(env: &Env) {
+    env.storage()
+        .instance()
+        .set(&DataKey::Reentrancy, &false);
+}
+
 #[contractimpl]
 impl RentPayments {
     pub fn init(env: Env, admin: Address) -> Result<(), ContractError> {
@@ -197,6 +237,99 @@ impl RentPayments {
         Self::contract_version(env)
     }
 
+    pub fn set_rent_payments(
+        env: Env,
+        admin: Address,
+        wallet: Address,
+    ) -> Result<(), ContractError> {
+        require_admin(&env);
+        env.storage().instance().set(&DataKey::Wallet, &wallet);
+        env.events().publish(
+            (
+                Symbol::new(&env, "rent_payments"),
+                Symbol::new(&env, "set_wallet"),
+            ),
+            (admin, wallet),
+        );
+        Ok(())
+    }
+
+    pub fn set_staking_rewards(
+        env: Env,
+        admin: Address,
+        staking_rewards: Address,
+    ) -> Result<(), ContractError> {
+        require_admin(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::StakingRewards, &staking_rewards);
+        env.events().publish(
+            (
+                Symbol::new(&env, "rent_payments"),
+                Symbol::new(&env, "set_staking_rewards"),
+            ),
+            (admin, staking_rewards),
+        );
+        Ok(())
+    }
+
+    pub fn record_rent_payment(
+        env: Env,
+        deal_id: DealId,
+        amount: i128,
+        payer: Address,
+    ) -> ReceiptId {
+        require_not_paused(&env);
+        require_wallet_invoker(&env);
+        if amount <= 0 {
+            panic_with_error!(&env, ContractError::InvalidAmount);
+        }
+
+        enter_nonreentrant(&env);
+
+        let receipt_id = increment_receipt_count(&env, deal_id);
+        let timestamp = env.ledger().timestamp();
+        let tx_id = get_tx_id(&env);
+        let receipt = Receipt {
+            id: receipt_id,
+            deal_id,
+            amount,
+            timestamp,
+            tx_id,
+            payer: payer.clone(),
+        };
+
+        let mut receipts = get_receipts(&env, deal_id);
+        receipts.push_back(receipt);
+        put_receipts(&env, deal_id, receipts);
+
+        env.events().publish(
+            (
+                Symbol::new(&env, "rent_payments"),
+                Symbol::new(&env, "record_payment"),
+                deal_id,
+            ),
+            (receipt_id, amount, payer.clone()),
+        );
+
+        let staking_rewards = get_staking_rewards(&env)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::MissingStakingRewards));
+        env.events().publish(
+            (
+                Symbol::new(&env, "rent_payments"),
+                Symbol::new(&env, "trigger_staking_rewards"),
+                deal_id,
+            ),
+            (staking_rewards.clone(), amount),
+        );
+
+        // TODO: Uncomment when StakingRewardsClient is available
+        // let rewards_client = StakingRewardsClient::new(&env, &staking_rewards);
+        // rewards_client.on_rent_payment(&amount);
+
+        exit_nonreentrant(&env);
+        receipt_id
+    }
     /// Create a new receipt for a deal
     /// This function records a monthly payment receipt
     pub fn create_receipt(
