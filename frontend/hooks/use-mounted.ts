@@ -4,7 +4,12 @@ export function useMounted() {
   const [isMounted, setIsMounted] = useState(false)
 
   useEffect(() => {
-    setIsMounted(true)
+    if (typeof queueMicrotask === 'function') {
+      queueMicrotask(() => setIsMounted(true))
+      return
+    }
+
+    setTimeout(() => setIsMounted(true), 0)
   }, [])
 
   return isMounted

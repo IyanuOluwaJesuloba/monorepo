@@ -11,6 +11,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import {
   useForm,
+  useWatch,
   type UseFormProps,
   type FieldValues,
   type DefaultValues,
@@ -54,6 +55,8 @@ export function useAppForm<T extends FieldValues>({
     ...rest,
   });
 
+  const values = useWatch({ control: form.control });
+
   // Auto-save draft on value changes
   const saveDraft = useCallback(
     (values: Partial<T>) => {
@@ -72,9 +75,8 @@ export function useAppForm<T extends FieldValues>({
 
   useEffect(() => {
     if (!draftKey) return;
-    const sub = form.watch((values) => saveDraft(values as Partial<T>));
-    return () => sub.unsubscribe();
-  }, [form, draftKey, saveDraft]);
+    saveDraft(values as Partial<T>);
+  }, [values, draftKey, saveDraft]);
 
   /** Clear the saved draft (call after successful submit) */
   const clearDraft = useCallback(() => {
