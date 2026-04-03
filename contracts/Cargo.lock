@@ -1183,8 +1183,10 @@ dependencies = [
 name = "rent_wallet"
 version = "0.1.0"
 dependencies = [
+ "rent_payments",
  "soroban-pausable",
  "soroban-sdk",
+ "staking_rewards",
 ]
 
 [[package]]

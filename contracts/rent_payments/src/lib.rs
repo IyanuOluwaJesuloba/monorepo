@@ -2,7 +2,8 @@
 
 use soroban_pausable::{Pausable, PausableError};
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, vec, Address, BytesN, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, vec, Address, BytesN,
+    Env, Symbol, Vec,
 };
 
 // TODO: Import StakingRewardsClient when contract interface is available
@@ -55,6 +56,9 @@ pub enum DataKey {
     ContractVersion,
     Paused,
     Admin,
+    Wallet,
+    StakingRewards,
+    Reentrancy,
     Deals,
     Receipts(DealId),
     ReceiptCount(DealId),
@@ -70,9 +74,11 @@ pub enum ContractError {
     AlreadyInitialized = 1,
     InvalidAmount = 2,
     InvalidLimit = 3,
-    MissingStakingRewards = 4,
-    ReentrancyDetected = 5,
-    MissingWallet = 6,
+    NotAuthorized = 4,
+    Paused = 5,
+    ReentrancyDetected = 6,
+    MissingWallet = 7,
+    MissingStakingRewards = 8,
 }
 
 #[contract]
@@ -83,6 +89,12 @@ fn is_paused(env: &Env) -> bool {
         .instance()
         .get::<_, bool>(&DataKey::Paused)
         .unwrap_or(false)
+}
+
+fn require_not_paused(env: &Env) {
+    if is_paused(env) {
+        panic_with_error!(env, ContractError::Paused);
+    }
 }
 
 fn get_admin(env: &Env) -> Address {
@@ -102,6 +114,41 @@ fn require_not_paused(env: &Env) {
     if is_paused(env) {
         panic!("contract is paused");
     }
+}
+
+fn get_wallet(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::Wallet)
+}
+
+fn get_staking_rewards(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::StakingRewards)
+}
+
+fn require_wallet_invoker(env: &Env) {
+    let wallet =
+        get_wallet(env).unwrap_or_else(|| panic_with_error!(env, ContractError::MissingWallet));
+    wallet.require_auth();
+}
+
+fn enter_nonreentrant(env: &Env) {
+    if env
+        .storage()
+        .instance()
+        .get::<_, bool>(&DataKey::Reentrancy)
+        .unwrap_or(false)
+    {
+        panic_with_error!(env, ContractError::ReentrancyDetected);
+    }
+    env.storage().instance().set(&DataKey::Reentrancy, &true);
+}
+
+fn exit_nonreentrant(env: &Env) {
+    env.storage().instance().set(&DataKey::Reentrancy, &false);
+}
+
+#[soroban_sdk::contractclient(name = "StakingRewardsClient")]
+pub trait StakingRewardsInterface {
+    fn on_rent_payment(env: Env, amount: i128);
 }
 
 fn get_receipts(env: &Env, deal_id: DealId) -> Vec<Receipt> {
@@ -221,6 +268,8 @@ impl RentPayments {
         env.storage()
             .instance()
             .set(&DataKey::ContractVersion, &1u32);
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().set(&DataKey::Reentrancy, &false);
         env.events()
             .publish((Symbol::new(&env, "init"),), (admin, 1u32));
         Ok(())
@@ -237,11 +286,36 @@ impl RentPayments {
         Self::contract_version(env)
     }
 
-    pub fn set_rent_payments(
-        env: Env,
-        admin: Address,
-        wallet: Address,
-    ) -> Result<(), ContractError> {
+    pub fn pause(env: Env) {
+        require_admin(&env);
+        env.storage().instance().set(&DataKey::Paused, &true);
+        env.events().publish(
+            (
+                Symbol::new(&env, "rent_payments"),
+                Symbol::new(&env, "paused"),
+            ),
+            (),
+        );
+    }
+
+    pub fn unpause(env: Env) {
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Paused, &false);
+        env.events().publish(
+            (
+                Symbol::new(&env, "rent_payments"),
+                Symbol::new(&env, "unpaused"),
+            ),
+            (),
+        );
+    }
+
+    pub fn is_paused(env: Env) -> bool {
+        is_paused(&env)
+    }
+
+    pub fn set_wallet(env: Env, admin: Address, wallet: Address) -> Result<(), ContractError> {
         require_admin(&env);
         env.storage().instance().set(&DataKey::Wallet, &wallet);
         env.events().publish(
@@ -273,12 +347,7 @@ impl RentPayments {
         Ok(())
     }
 
-    pub fn record_rent_payment(
-        env: Env,
-        deal_id: DealId,
-        amount: i128,
-        payer: Address,
-    ) -> ReceiptId {
+    pub fn record_rent_payment(env: Env, deal_id: DealId, amount: i128, payer: Address) -> ReceiptId {
         require_not_paused(&env);
         require_wallet_invoker(&env);
         if amount <= 0 {
@@ -323,13 +392,13 @@ impl RentPayments {
             (staking_rewards.clone(), amount),
         );
 
-        // TODO: Uncomment when StakingRewardsClient is available
-        // let rewards_client = StakingRewardsClient::new(&env, &staking_rewards);
-        // rewards_client.on_rent_payment(&amount);
+        let rewards_client = StakingRewardsClient::new(&env, &staking_rewards);
+        rewards_client.on_rent_payment(&amount);
 
         exit_nonreentrant(&env);
         receipt_id
     }
+
     /// Create a new receipt for a deal
     /// This function records a monthly payment receipt
     pub fn create_receipt(
@@ -1224,7 +1293,6 @@ mod test {
     }
 
     #[test]
-    #[should_panic(expected = "contract is paused")]
     fn test_pause() {
         let env = Env::default();
         let (admin, client, contract_id) = setup(&env);
@@ -1244,7 +1312,7 @@ mod test {
 
         assert!(client.is_paused());
 
-        // Try to create a receipt while paused (should panic)
+        // Try to create a receipt while paused (should fail)
         env.mock_auths(&[MockAuth {
             address: &admin,
             invoke: &MockAuthInvoke {
@@ -1254,7 +1322,11 @@ mod test {
                 sub_invokes: &[],
             },
         }]);
-        client.create_receipt(&1u64, &1000, &payer);
+        let err = client
+            .try_create_receipt(&1u64, &1000i128, &payer)
+            .unwrap_err()
+            .unwrap();
+        assert_eq!(err, ContractError::Paused);
     }
 
     // ============================================================================

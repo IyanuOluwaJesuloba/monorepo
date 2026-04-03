@@ -11,6 +11,9 @@ pub mod validation;
 #[cfg(kani)]
 mod formal_properties;
 
+#[cfg(test)]
+mod e2e_rent_flow_tests;
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -19,6 +22,9 @@ pub enum DataKey {
     /// Per-user balance stored in persistent storage (gas-optimised, #386)
     Balance(Address),
     Paused,
+    RentPayments,
+    /// Reentrancy lock for cross-contract call protection (#390)
+    Reentrancy,
     // ── Upgrade governance (#392) ─────────────────────────────────────────
     Guardian,
     UpgradeDelay,
@@ -37,22 +43,24 @@ pub enum ContractError {
     Paused = 3,
     InvalidAmount = 4,
     InsufficientBalance = 5,
+    ReentrancyDetected = 6,
+    MissingRentPayments = 7,
     // Upgrade governance errors
-    UpgradeAlreadyPending = 6,
-    NoUpgradePending = 7,
-    UpgradeDelayNotMet = 8,
+    UpgradeAlreadyPending = 8,
+    NoUpgradePending = 9,
+    UpgradeDelayNotMet = 10,
     /// Amount exceeds the allowed maximum (prevents overflow cascades)
-    AmountTooLarge = 9,
+    AmountTooLarge = 11,
     /// Time/lock value exceeds the safe upper bound
-    InvalidTimeValue = 10,
+    InvalidTimeValue = 12,
     /// String field was empty
-    EmptyString = 11,
+    EmptyString = 13,
     /// String field exceeds maximum allowed length
-    StringTooLong = 12,
+    StringTooLong = 14,
     /// String contains non-printable or disallowed characters
-    InvalidStringChar = 13,
+    InvalidStringChar = 15,
     /// Two addresses that must differ were identical
-    SameAddress = 14,
+    SameAddress = 16,
 }
 
 // ── Contract ─────────────────────────────────────────────────────────────────
@@ -106,6 +114,32 @@ fn require_not_paused(env: &Env) -> Result<(), ContractError> {
     Ok(())
 }
 
+fn get_rent_payments(env: &Env) -> Option<Address> {
+    env.storage().instance().get(&DataKey::RentPayments)
+}
+
+fn enter_nonreentrant(env: &Env) -> Result<(), ContractError> {
+    if env
+        .storage()
+        .instance()
+        .get::<_, bool>(&DataKey::Reentrancy)
+        .unwrap_or(false)
+    {
+        return Err(ContractError::ReentrancyDetected);
+    }
+    env.storage().instance().set(&DataKey::Reentrancy, &true);
+    Ok(())
+}
+
+fn exit_nonreentrant(env: &Env) {
+    env.storage().instance().set(&DataKey::Reentrancy, &false);
+}
+
+#[soroban_sdk::contractclient(name = "RentPaymentsClient")]
+pub trait RentPaymentsInterface {
+    fn record_rent_payment(env: Env, deal_id: u64, amount: i128, payer: Address) -> u64;
+}
+
 // ── Contract implementation ───────────────────────────────────────────────────
 
 #[contractimpl]
@@ -120,6 +154,7 @@ impl RentWallet {
             .instance()
             .set(&DataKey::ContractVersion, &1u32);
         env.storage().instance().set(&DataKey::Paused, &false);
+        env.storage().instance().set(&DataKey::Reentrancy, &false);
 
         // #389: include version in init event
         env.events().publish(
