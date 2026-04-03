@@ -15,14 +15,9 @@ function subscribe(listener: () => void) {
   }
 }
 
-  useEffect(() => {
-    if (typeof queueMicrotask === 'function') {
-      queueMicrotask(() => setIsMounted(true))
-      return
-    }
-
-    setTimeout(() => setIsMounted(true), 0)
-  }, [])
+function getSnapshot() {
+  return mounted
+}
 
 export function useMounted() {
   return useSyncExternalStore(subscribe, getSnapshot, () => false)
