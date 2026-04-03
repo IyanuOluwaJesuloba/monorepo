@@ -69,7 +69,7 @@ fn e2e_pay_rent_success_and_rollback_on_staking_failure() {
     // ---- Failure + rollback flow ----
     // Pause staking rewards so rent_payments -> staking_rewards call fails and reverts whole tx
     env.mock_all_auths();
-    rewards.pause();
+    rewards.pause(&admin);
 
     let deal_id2: u64 = 43;
     let amount2: i128 = 100;

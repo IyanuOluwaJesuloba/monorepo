@@ -62,9 +62,6 @@ pub enum DataKey {
     Deals,
     Receipts(DealId),
     ReceiptCount(DealId),
-    Wallet,
-    StakingRewards,
-    Reentrancy,
 }
 
 #[contracterror]
@@ -108,12 +105,6 @@ fn require_admin(env: &Env) -> Result<(), ContractError> {
     let admin = get_admin(env);
     admin.require_auth();
     Ok(())
-}
-
-fn require_not_paused(env: &Env) {
-    if is_paused(env) {
-        panic!("contract is paused");
-    }
 }
 
 fn get_wallet(env: &Env) -> Option<Address> {
@@ -226,35 +217,7 @@ fn get_tx_id(env: &Env) -> TxId {
     BytesN::from_array(env, &bytes)
 }
 
-fn get_wallet(env: &Env) -> Option<Address> {
-    env.storage().instance().get(&DataKey::Wallet)
-}
 
-fn get_staking_rewards(env: &Env) -> Option<Address> {
-    env.storage().instance().get(&DataKey::StakingRewards)
-}
-
-fn require_wallet_invoker(env: &Env) {
-    let wallet =
-        get_wallet(env).unwrap_or_else(|| panic_with_error!(env, ContractError::MissingWallet));
-    wallet.require_auth();
-}
-
-fn enter_nonreentrant(env: &Env) {
-    if env
-        .storage()
-        .instance()
-        .get::<_, bool>(&DataKey::Reentrancy)
-        .unwrap_or(false)
-    {
-        panic_with_error!(env, ContractError::ReentrancyDetected);
-    }
-    env.storage().instance().set(&DataKey::Reentrancy, &true);
-}
-
-fn exit_nonreentrant(env: &Env) {
-    env.storage().instance().set(&DataKey::Reentrancy, &false);
-}
 
 #[contractimpl]
 impl RentPayments {
@@ -282,35 +245,6 @@ impl RentPayments {
 
     pub fn version(env: Env) -> u32 {
         Self::contract_version(env)
-    }
-
-    pub fn pause(env: Env) {
-        require_admin(&env);
-        env.storage().instance().set(&DataKey::Paused, &true);
-        env.events().publish(
-            (
-                Symbol::new(&env, "rent_payments"),
-                Symbol::new(&env, "paused"),
-            ),
-            (),
-        );
-    }
-
-    pub fn unpause(env: Env) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
-        admin.require_auth();
-        env.storage().instance().set(&DataKey::Paused, &false);
-        env.events().publish(
-            (
-                Symbol::new(&env, "rent_payments"),
-                Symbol::new(&env, "unpaused"),
-            ),
-            (),
-        );
-    }
-
-    pub fn is_paused(env: Env) -> bool {
-        is_paused(&env)
     }
 
     pub fn set_wallet(env: Env, admin: Address, wallet: Address) -> Result<(), ContractError> {

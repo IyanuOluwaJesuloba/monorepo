@@ -54,7 +54,7 @@ mod test {
                 sub_invokes: &[],
             },
         }]);
-        let tx_hash = client.queue(&admin, &target, &function, &args, &delay);
+        let _tx_hash = client.queue(&admin, &target, &function, &args, &delay);
         let eta = env.ledger().timestamp() + delay;
 
         let result = client.try_execute(&target, &function, &args, &eta);
@@ -66,7 +66,7 @@ mod test {
         // Execute (no auth needed for execution, as delay is the security)
         // Note: Real execution will fail because 'target' is a random address, but we check the timelock's own logic first.
         // We can mock the cross-contract call if needed, but for now we just verify it doesn't fail with TimelockError::TimestampNotMet.
-        let exec_result = client.try_execute(&target, &function, &args, &eta);
+        let _exec_result = client.try_execute(&target, &function, &args, &eta);
         // It will fail because the contract 'target' doesn't exist, but that's fine for this test.
         // If it returns a TimelockError, then it failed inside the timelock.
     }

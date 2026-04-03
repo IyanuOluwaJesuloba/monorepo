@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod integration_test {
-    use crate::{Timelock, TimelockClient, TimelockError};
+    use crate::{Timelock, TimelockClient};
     // We need to import StakingPool to register it in the test environment
     // Since StakingPool is in a different crate, we need to add it as a dev-dependency
     // but in this monorepo, we can just use the source if we're in the same workspace.
@@ -38,7 +38,7 @@ mod integration_test {
         let timelock_client = TimelockClient::new(env, &timelock_id);
 
         let target_id = env.register(MockTarget, ());
-        let target_client = MockTargetClient::new(env, &target_id);
+        let _target_client = MockTargetClient::new(env, &target_id);
 
         let admin = Address::generate(env);
         let multisig_member = Address::generate(env);

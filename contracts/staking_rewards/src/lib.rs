@@ -22,8 +22,6 @@ pub enum StorageKey {
     UpgradeDelay,
     PendingUpgradeHash,
     PendingUpgradeAt,
-    RentPayments,
-    Reentrancy,
 }
 
 #[contracterror]
