@@ -38,7 +38,7 @@ export function useAppForm<T extends FieldValues>({
 
   // Merge persisted draft into defaultValues
   const mergedDefaults = (() => {
-    if (!draftKey || typeof window === "undefined") return defaultValues;
+    if (!draftKey || globalThis.window === undefined) return defaultValues;
     try {
       const raw = localStorage.getItem(`form-draft:${draftKey}`);
       if (raw) return { ...(defaultValues as object), ...JSON.parse(raw) } as DefaultValues<T>;
@@ -60,7 +60,7 @@ export function useAppForm<T extends FieldValues>({
   // Auto-save draft on value changes
   const saveDraft = useCallback(
     (values: Partial<T>) => {
-      if (!draftKey || typeof window === "undefined") return;
+      if (!draftKey || globalThis.window === undefined) return;
       if (draftTimer.current) clearTimeout(draftTimer.current);
       draftTimer.current = setTimeout(() => {
         try {
@@ -80,7 +80,7 @@ export function useAppForm<T extends FieldValues>({
 
   /** Clear the saved draft (call after successful submit) */
   const clearDraft = useCallback(() => {
-    if (!draftKey || typeof window === "undefined") return;
+    if (!draftKey || globalThis.window === undefined) return;
     localStorage.removeItem(`form-draft:${draftKey}`);
   }, [draftKey]);
 

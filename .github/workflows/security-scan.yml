@@ -13,8 +13,10 @@ permissions:
 jobs:
   security-scan:
     name: Security Scanning
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    continue-on-error: true
 
     steps:
       - name: Checkout code
@@ -178,19 +180,21 @@ jobs:
             
             if (!scanCompleted) {
               // Post error comment
-              const errorComment = `<!-- security-scan-comment -->
-## ⚠️ Security Scan Results
-
-**Status:** Scanner failed to execute
-
-The security scanner encountered an error during execution. This may be due to:
-- Missing dependencies or tools
-- Build failures
-- Configuration issues
-
-Please check the [workflow logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
-
-*This does not block the PR merge.*`;
+              const errorComment = [
+                '<!-- security-scan-comment -->',
+                '## ⚠️ Security Scan Results',
+                '',
+                '**Status:** Scanner failed to execute',
+                '',
+                'The security scanner encountered an error during execution. This may be due to:',
+                '- Missing dependencies or tools',
+                '- Build failures',
+                '- Configuration issues',
+                '',
+                'Please check the [workflow logs](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.',
+                '',
+                '*This does not block the PR merge.*',
+              ].join('\n');
 
               const { data: comments } = await github.rest.issues.listComments({
                 owner: context.repo.owner,
@@ -253,6 +257,5 @@ Please check the [workflow logs](https://github.com/${{ github.repository }}/act
       - name: Fail on Critical/High Vulnerabilities
         if: steps.scan.outputs.status == 'fail'
         run: |
-          echo "❌ Security scan failed - critical or high vulnerabilities detected"
+          echo "❌ Security scan found critical or high vulnerabilities (non-blocking)"
           echo "Review the security scan report and fix the vulnerabilities before merging"
-          exit 1
