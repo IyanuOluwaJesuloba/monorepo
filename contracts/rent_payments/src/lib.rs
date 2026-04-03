@@ -217,8 +217,6 @@ fn get_tx_id(env: &Env) -> TxId {
     BytesN::from_array(env, &bytes)
 }
 
-
-
 #[contractimpl]
 impl RentPayments {
     pub fn init(env: Env, admin: Address) -> Result<(), ContractError> {
