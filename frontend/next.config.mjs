@@ -1,11 +1,5 @@
 /** @type {import('next').NextConfig} */
-import bundleAnalyzer from "@next/bundle-analyzer";
-import createNextIntlPlugin from "next-intl/plugin";
 import { performanceConfig } from "./next.config.performance.mjs";
-
-const withBundleAnalyzer = bundleAnalyzer({
-  enabled: process.env.ANALYZE === "true",
-});
 
 const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL ?? 'http://localhost:4000'
 
@@ -35,4 +29,4 @@ const nextConfig = {
   ...performanceConfig,
 };
 
-export default withBundleAnalyzer(nextConfig);
+export default nextConfig;

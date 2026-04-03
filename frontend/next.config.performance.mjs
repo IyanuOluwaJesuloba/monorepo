@@ -71,7 +71,6 @@ export const performanceConfig = {
 
   // Turbopack configuration (Next.js 16+)
   turbopack: {
-    // Empty config to acknowledge Turbopack usage
-    // Webpack config above is kept for fallback compatibility
+    root: '../../',
   },
 };

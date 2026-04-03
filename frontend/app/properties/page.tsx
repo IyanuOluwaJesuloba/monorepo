@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
@@ -57,7 +57,7 @@ function parseCsv(v: string | null) {
     .filter(Boolean);
 }
 
-export default function PropertiesPage() {
+function PropertiesPageContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -612,9 +612,7 @@ export default function PropertiesPage() {
                         <div className="border-t-2 border-dashed border-foreground/30 pt-4">
                           <div className="flex items-end justify-between">
                             <div>
-                              <p className="text-xs text-muted-foreground">
-                                Annual Rent
-                              </p>
+                              <p className="text-xs text-muted-foreground">Annual Rent</p>
                               <p className="font-mono text-xl font-black">
                                 {formatNgn(property.price)}
                               </p>
@@ -634,17 +632,58 @@ export default function PropertiesPage() {
                           </p>
                         </div>
                       </div>
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        From{" "}
-                        <span className="font-bold text-primary">
-                          {formatPrice(Math.round(property.price / 12))}/mo
-                        </span>{" "}
-                        with Shelterflex
-                      </p>
                     </div>
-                  ))}
+                ))}
             </div>
           )}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+export default function PropertiesPage() {
+  return (
+    <Suspense fallback={<PropertiesPageSkeleton />}>
+      <PropertiesPageContent />
+    </Suspense>
+  );
+}
+
+function PropertiesPageSkeleton() {
+  return (
+    <main className="min-h-screen bg-background">
+      <section className="border-b-3 border-foreground bg-muted py-12 md:py-16">
+        <div className="container mx-auto px-4">
+          <Skeleton className="h-10 w-72" />
+          <Skeleton className="mt-4 h-6 w-full max-w-2xl" />
+        </div>
+      </section>
+      <section className="border-b-3 border-foreground bg-card py-6">
+        <div className="container mx-auto px-4">
+          <Skeleton className="h-14 w-full max-w-xl" />
+        </div>
+      </section>
+      <section className="py-12">
+        <div className="container mx-auto px-4">
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div
+                key={i}
+                className="group border-3 border-foreground bg-card p-4 shadow-[4px_4px_0px_0px_rgba(26,26,26,1)]"
+              >
+                <Skeleton className="mb-4 aspect-4/3 w-full" />
+                <Skeleton className="h-5 w-4/5" />
+                <Skeleton className="mt-3 h-4 w-2/3" />
+                <div className="mt-4 grid grid-cols-3 gap-2">
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-full" />
+                </div>
+                <Skeleton className="mt-6 h-10 w-full" />
+              </div>
+            ))}
+          </div>
         </div>
       </section>
     </main>
